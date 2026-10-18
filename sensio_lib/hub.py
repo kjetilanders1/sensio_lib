@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
+from .climate import ClimateZone, PowerMeter, parse_climate
 from .light import Light, LightState
 from .messages import Message, RsnMessage
 from .scene import Scene
@@ -29,6 +30,9 @@ class Hub:
         self._lights: list[Light] = []
         self._scenes: list[Scene] = []
         self._state_index: dict[int, Light] = {}
+        self._climate_zones: list[ClimateZone] = []
+        self._power_meter: PowerMeter | None = None
+        self._value_index: dict[int, Callable[[RsnMessage], None]] = {}
         self._unsubscribe: Callable[[], None] | None = None
         # Some controllers close idle connections every ~2 minutes and the hub
         # reconnects within a second. Only report the hub unavailable when the
@@ -106,10 +110,21 @@ class Hub:
         """Drop the current socket so it reconnects; sends nothing to the controller."""
         await self._socket_manager.force_reconnect()
 
+    def get_climate_zones(self) -> list[ClimateZone]:
+        """Return the read-only heating zones (thermostat + relay)."""
+        return list(self._climate_zones)
+
+    def get_power_meter(self) -> PowerMeter | None:
+        """Return the read-only house power meter, if the project has one."""
+        return self._power_meter
+
     def _handle_message(self, message: Message) -> None:
-        """Update light state from RSN notifications."""
+        """Update lights, heating zones and the meter from RSN notifications."""
         if not isinstance(message, RsnMessage):
             return
+        handler = self._value_index.get(message.address)
+        if handler is not None:
+            handler(message)
         light = self._state_index.get(message.address)
         value = message.value
         if light is None or value is None:
@@ -133,6 +148,15 @@ class Hub:
         self._state_index = {
             light.state_address: light for light in self._lights if light.state_address is not None
         }
+        self._climate_zones, self._power_meter = parse_climate(functions)
+        self._value_index = {}
+        for zone in self._climate_zones:
+            self._value_index[zone.thermostat_address] = zone.handle
+            if zone.relay_address is not None:
+                self._value_index[zone.relay_address] = zone.handle
+        if self._power_meter is not None:
+            for address in self._power_meter.addresses:
+                self._value_index[address] = self._power_meter.handle
 
     def _parse_lights(self, functions: list[dict]) -> list[Light]:
         """Parse individual lights and room-level light controls."""

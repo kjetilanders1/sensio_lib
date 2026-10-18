@@ -56,6 +56,10 @@ async with Hub("192.168.1.100") as hub:
 
 Tested against a Sensio SC-1 controller as well.
 
+## Heating (read-only, v1.4.0)
+
+`hub.get_climate_zones()` returns one `ClimateZone` per thermostat with `measured_temperature`, `setpoint`, `heat_demand` and `relay_on`; `hub.get_power_meter()` returns a `PowerMeter` with `power_w` (average over the controller's 10-minute period) and `energy_kwh` (cumulative). All values come from the controller's notifications and are `None` until the first one after connecting; thermostats only report when the temperature changes. Nothing is sent to the controller, and there is no heating control yet.
+
 ## Device Support
 
 This library has been tested with a Sensio X1 controller. Testing is limited, so your experience may vary. Device support is also very limited to only scenes and lights. Light state is read back from the controller's notifications (see above); dimming is not supported yet.
