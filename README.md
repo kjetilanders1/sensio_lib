@@ -51,6 +51,7 @@ async with Hub("192.168.1.100") as hub:
 - **Read loop** — the `Hub` continuously reads what the controller pushes, so its send buffer never fills up (a full buffer made the controller drop the connection).
 - **Automatic reconnect** — when the connection is lost the hub reconnects with exponential backoff (1 s doubling to 60 s, with jitter). `hub.connected` and `hub.add_connection_listener()` report the connection state; commands sent while disconnected wait briefly for the reconnect, then raise `SensioConnectionError`.
 - **Real light state** — the controller pushes `RSN <address> <name> <type> ...` notifications for every change, including wall switches. Lights that have a `light_state` (or `light_relay`) function in the project get their state from these (`light.add_listener()`, `light.has_real_state`). Room-level "All Lights" are on when any light in the room is on. State is unknown until the first notification after connecting.
+- **Availability grace** — some controllers close idle connections about every two minutes; the hub reconnects within a second. `hub.available` / `hub.add_availability_listener()` only report unavailable when the connection stays down longer than `availability_grace` (default 15 s).
 - `hub.force_reconnect()` drops the socket (sends nothing) for diagnostics and tests.
 
 Tested against a Sensio SC-1 controller as well.

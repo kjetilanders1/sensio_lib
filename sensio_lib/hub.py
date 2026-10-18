@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
 from .light import Light, LightState
@@ -18,12 +19,25 @@ class Hub:
     typically from cached data originally fetched through SensioApi.
     """
 
-    def __init__(self, server_address: str, socket_manager: SocketManager | None = None) -> None:
+    def __init__(
+        self,
+        server_address: str,
+        socket_manager: SocketManager | None = None,
+        availability_grace: float = 15.0,
+    ) -> None:
         self._socket_manager = socket_manager or SocketManager(server_address)
         self._lights: list[Light] = []
         self._scenes: list[Scene] = []
         self._state_index: dict[int, Light] = {}
         self._unsubscribe: Callable[[], None] | None = None
+        # Some controllers close idle connections every ~2 minutes and the hub
+        # reconnects within a second. Only report the hub unavailable when the
+        # connection stays down longer than this grace period.
+        self._availability_grace = availability_grace
+        self._available = False
+        self._grace_handle: asyncio.TimerHandle | None = None
+        self._availability_listeners: list[Callable[[bool], None]] = []
+        self._unsubscribe_conn: Callable[[], None] | None = None
 
     async def connect(self, functions_data: dict) -> None:
         """Parse device data and connect to the local controller.
@@ -35,7 +49,45 @@ class Hub:
         self._parse_devices(functions_data)
         if self._unsubscribe is None:
             self._unsubscribe = self._socket_manager.add_message_listener(self._handle_message)
+        if self._unsubscribe_conn is None:
+            self._unsubscribe_conn = self._socket_manager.add_connection_listener(self._handle_connection)
         await self._socket_manager.connect()
+        self._set_available(True)
+
+    @property
+    def available(self) -> bool:
+        """True while connected, and during short reconnects (within the grace period)."""
+        return self._available
+
+    def add_availability_listener(self, listener: Callable[[bool], None]) -> Callable[[], None]:
+        """Call ``listener(True/False)`` when ``available`` changes. Returns an unsubscribe function."""
+        self._availability_listeners.append(listener)
+        return lambda: self._availability_listeners.remove(listener)
+
+    def _set_available(self, available: bool) -> None:
+        if available == self._available:
+            return
+        self._available = available
+        for listener in list(self._availability_listeners):
+            listener(available)
+
+    def _handle_connection(self, connected: bool) -> None:
+        if connected:
+            if self._grace_handle is not None:
+                self._grace_handle.cancel()
+                self._grace_handle = None
+            self._set_available(True)
+        elif self._grace_handle is None:
+            if self._availability_grace <= 0:
+                self._set_available(False)
+                return
+            loop = asyncio.get_running_loop()
+            self._grace_handle = loop.call_later(self._availability_grace, self._grace_expired)
+
+    def _grace_expired(self) -> None:
+        self._grace_handle = None
+        if not self._socket_manager.connected:
+            self._set_available(False)
 
     @property
     def connected(self) -> bool:
@@ -250,7 +302,14 @@ class Hub:
         if self._unsubscribe is not None:
             self._unsubscribe()
             self._unsubscribe = None
+        if self._unsubscribe_conn is not None:
+            self._unsubscribe_conn()
+            self._unsubscribe_conn = None
+        if self._grace_handle is not None:
+            self._grace_handle.cancel()
+            self._grace_handle = None
         await self._socket_manager.close()
+        self._set_available(False)
 
     async def __aenter__(self) -> Hub:
         return self
