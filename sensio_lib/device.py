@@ -1,6 +1,6 @@
 """Base device class for Sensio devices."""
 
-from sensio_lib.socket_manager import SocketManager
+from .socket_manager import SocketManager
 
 
 class Device:

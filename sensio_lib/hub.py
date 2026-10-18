@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from sensio_lib.light import Light
-from sensio_lib.scene import Scene
-from sensio_lib.socket_manager import SocketManager
+from collections.abc import Callable
+
+from .light import Light, LightState
+from .messages import Message, RsnMessage
+from .scene import Scene
+from .socket_manager import SocketManager
 
 
 class Hub:
@@ -15,10 +18,12 @@ class Hub:
     typically from cached data originally fetched through SensioApi.
     """
 
-    def __init__(self, server_address: str) -> None:
-        self._socket_manager = SocketManager(server_address)
+    def __init__(self, server_address: str, socket_manager: SocketManager | None = None) -> None:
+        self._socket_manager = socket_manager or SocketManager(server_address)
         self._lights: list[Light] = []
         self._scenes: list[Scene] = []
+        self._state_index: dict[int, Light] = {}
+        self._unsubscribe: Callable[[], None] | None = None
 
     async def connect(self, functions_data: dict) -> None:
         """Parse device data and connect to the local controller.
@@ -28,7 +33,36 @@ class Hub:
                 SensioApi.get_devices(). Can be cached and replayed.
         """
         self._parse_devices(functions_data)
+        if self._unsubscribe is None:
+            self._unsubscribe = self._socket_manager.add_message_listener(self._handle_message)
         await self._socket_manager.connect()
+
+    @property
+    def connected(self) -> bool:
+        """Return True while the connection to the controller is up."""
+        return self._socket_manager.connected
+
+    def add_connection_listener(self, listener: Callable[[bool], None]) -> Callable[[], None]:
+        """Call ``listener(True/False)`` when the controller connection comes up or goes down."""
+        return self._socket_manager.add_connection_listener(listener)
+
+    def add_message_listener(self, listener: Callable[[Message], None]) -> Callable[[], None]:
+        """Call ``listener(message)`` for every message pushed by the controller."""
+        return self._socket_manager.add_message_listener(listener)
+
+    async def force_reconnect(self) -> None:
+        """Drop the current socket so it reconnects; sends nothing to the controller."""
+        await self._socket_manager.force_reconnect()
+
+    def _handle_message(self, message: Message) -> None:
+        """Update light state from RSN notifications."""
+        if not isinstance(message, RsnMessage):
+            return
+        light = self._state_index.get(message.address)
+        value = message.value
+        if light is None or value is None:
+            return
+        light.set_state(LightState.ON if value > 0 else LightState.OFF)
 
     def get_lights(self) -> list[Light]:
         """Return all discovered lights."""
@@ -44,6 +78,9 @@ class Hub:
 
         self._lights = self._parse_lights(functions)
         self._scenes = self._parse_scenes(functions)
+        self._state_index = {
+            light.state_address: light for light in self._lights if light.state_address is not None
+        }
 
     def _parse_lights(self, functions: list[dict]) -> list[Light]:
         """Parse individual lights and room-level light controls."""
@@ -56,7 +93,7 @@ class Hub:
             sub_type = func["subType"]
             sub_group_id = func["subGroupId"]
 
-            if sub_type not in ("light_on", "light_off") or sub_group_id == 0:
+            if sub_type not in ("light_on", "light_off", "light_state", "light_relay") or sub_group_id == 0:
                 continue
 
             if sub_group_id not in groups:
@@ -65,12 +102,18 @@ class Hub:
                     "zone_id": func["zoneId"],
                     "on_address": None,
                     "off_address": None,
+                    "state_address": None,
+                    "relay_address": None,
                 }
 
             if sub_type == "light_on":
                 groups[sub_group_id]["on_address"] = func["address"]
             elif sub_type == "light_off":
                 groups[sub_group_id]["off_address"] = func["address"]
+            elif sub_type == "light_state":
+                groups[sub_group_id]["state_address"] = func["address"]
+            elif sub_type == "light_relay":
+                groups[sub_group_id]["relay_address"] = func["address"]
 
         for sub_group_id, info in groups.items():
             if info["on_address"] is not None and info["off_address"] is not None:
@@ -82,6 +125,8 @@ class Hub:
                         on_address=info["on_address"],
                         off_address=info["off_address"],
                         socket_manager=self._socket_manager,
+                        # Prefer the *_State memory value; fall back to the relay output.
+                        state_address=info["state_address"] or info["relay_address"],
                     )
                 )
 
@@ -110,20 +155,35 @@ class Hub:
             elif sub_type == "LightOffRoom":
                 room_groups[zone_id]["off_address"] = func["address"]
 
+        individual = list(lights)
         for zone_id, info in room_groups.items():
             if info["on_address"] is not None and info["off_address"] is not None:
-                lights.append(
-                    Light(
-                        unique_id=f"{zone_id}_room",
-                        name=info["name"],
-                        zone_id=info["zone_id"],
-                        on_address=info["on_address"],
-                        off_address=info["off_address"],
-                        socket_manager=self._socket_manager,
-                    )
+                members = [m for m in individual if m.zone_id == zone_id and m.has_real_state]
+                room = Light(
+                    unique_id=f"{zone_id}_room",
+                    name=info["name"],
+                    zone_id=info["zone_id"],
+                    on_address=info["on_address"],
+                    off_address=info["off_address"],
+                    socket_manager=self._socket_manager,
+                    derived_state=bool(members),
                 )
+                for member in members:
+                    member.add_listener(self._room_updater(room, members))
+                lights.append(room)
 
         return lights
+
+    @staticmethod
+    def _room_updater(room: Light, members: list[Light]) -> Callable[[], None]:
+        """Room light is on if any member is on, off if all known members are off."""
+        def update() -> None:
+            states = [m.state for m in members]
+            if LightState.ON in states:
+                room.set_state(LightState.ON)
+            elif states and all(st == LightState.OFF for st in states):
+                room.set_state(LightState.OFF)
+        return update
 
     def _parse_scenes(self, functions: list[dict]) -> list[Scene]:
         """Parse scene functions into Scene objects."""
@@ -187,6 +247,9 @@ class Hub:
 
     async def close(self) -> None:
         """Close the socket connection and clean up resources."""
+        if self._unsubscribe is not None:
+            self._unsubscribe()
+            self._unsubscribe = None
         await self._socket_manager.close()
 
     async def __aenter__(self) -> Hub:

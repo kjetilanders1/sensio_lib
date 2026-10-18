@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from sensio_lib.api_client import SensioApiClient
-from sensio_lib.const import SensioEnvironment
+from .api_client import SensioApiClient
+from .const import SensioEnvironment
 
 
 class SensioApi:

@@ -5,7 +5,7 @@ import logging
 
 import aiohttp
 
-from sensio_lib.const import (
+from .const import (
     SENSIO_AGENT_REQUEST,
     SENSIO_BASE_URL,
     SENSIO_PROJECTS_URL,
@@ -15,7 +15,7 @@ from sensio_lib.const import (
     SENSIO_HA_PILOT_TOKEN_URL,
     SensioEnvironment,
 )
-from sensio_lib.exceptions import SensioAuthenticationError, SensioException
+from .exceptions import SensioAuthenticationError, SensioException
 
 logger = logging.getLogger(__name__)
 

@@ -46,9 +46,18 @@ async with Hub("192.168.1.100") as hub:
         await scene.activate()
 ```
 
+## Connection handling and state (v1.3.0)
+
+- **Read loop** — the `Hub` continuously reads what the controller pushes, so its send buffer never fills up (a full buffer made the controller drop the connection).
+- **Automatic reconnect** — when the connection is lost the hub reconnects with exponential backoff (1 s doubling to 60 s, with jitter). `hub.connected` and `hub.add_connection_listener()` report the connection state; commands sent while disconnected wait briefly for the reconnect, then raise `SensioConnectionError`.
+- **Real light state** — the controller pushes `RSN <address> <name> <type> ...` notifications for every change, including wall switches. Lights that have a `light_state` (or `light_relay`) function in the project get their state from these (`light.add_listener()`, `light.has_real_state`). Room-level "All Lights" are on when any light in the room is on. State is unknown until the first notification after connecting.
+- `hub.force_reconnect()` drops the socket (sends nothing) for diagnostics and tests.
+
+Tested against a Sensio SC-1 controller as well.
+
 ## Device Support
 
-This library has been tested with a Sensio X1 controller. Testing is limited, so your experience may vary. Device support is also very limited to only scenes and lights. There is no reading of data back from the controller only sending of commands.
+This library has been tested with a Sensio X1 controller. Testing is limited, so your experience may vary. Device support is also very limited to only scenes and lights. Light state is read back from the controller's notifications (see above); dimming is not supported yet.
 
 ## Requirements
 

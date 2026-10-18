@@ -1,7 +1,7 @@
 """Scene device for Sensio scene activation."""
 
-from sensio_lib.device import Device
-from sensio_lib.socket_manager import SocketManager
+from .device import Device
+from .socket_manager import SocketManager
 
 
 class Scene(Device):
