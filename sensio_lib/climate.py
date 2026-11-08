@@ -5,9 +5,11 @@ Filled from RSN notifications, and from SSN answers to ``d_obj`` queries
 else is sent to the controller. Values are None until the first message.
 
 Observed formats (Sensio SC-1):
-- Thermostat (type 7): ``RSN <addr> TH_<Room><n> 7 1 <demand> <setpoint> <measured> <x>``
+- Thermostat (type 7): ``RSN <addr> TH_<Room><n> 7 1 <demand> <setpoint> <measured> <adjust>``
   ``demand`` is 1 while the zone wants heat (the heat relay switches on at the
-  same moment). The last field is not understood yet and is ignored.
+  same moment). ``adjust`` is the manual offset set on the thermostat itself;
+  the zone regulates to ``setpoint + adjust`` (living room on 2026-11-08:
+  22.0 - 2.3 = 19.7 at 20.4 measured, relay off).
 - Heat relay (type 8): ``RSN <addr> R_VK<Room><n> 8 1 <on> 0``.
 - Active mode (``ThermCur``, ``M_<Room><n>_Cur``, type 23): the index of the
   setpoint slot in use, 0 = comfort, 1 = saving, 2 = frost protection (as in
@@ -60,6 +62,7 @@ class ClimateZone(_Observable):
         self.mode_address = mode_address
         self.measured_temperature: float | None = None
         self.setpoint: float | None = None
+        self.adjustment: float | None = None
         self.heat_demand: bool | None = None
         self.relay_on: bool | None = None
         self.mode_index: int | None = None
@@ -67,6 +70,13 @@ class ClimateZone(_Observable):
     @property
     def unique_id(self) -> str:
         return f"{self.zone_id}_climate"
+
+    @property
+    def effective_setpoint(self) -> float | None:
+        """What the zone regulates to: the setpoint plus the thermostat's own adjustment."""
+        if self.setpoint is None:
+            return None
+        return round(self.setpoint + (self.adjustment or 0.0), 1)
 
     @property
     def mode(self) -> str | None:
@@ -85,9 +95,10 @@ class ClimateZone(_Observable):
         changed = False
         if message.address == self.thermostat_address and len(message.fields) >= 4:
             demand, setpoint, measured = message.fields[1], _float(message.fields[2]), _float(message.fields[3])
-            new = (demand == "1", setpoint, measured)
-            if new != (self.heat_demand, self.setpoint, self.measured_temperature):
-                self.heat_demand, self.setpoint, self.measured_temperature = new
+            adjustment = _float(message.fields[4]) if len(message.fields) >= 5 else None
+            new = (demand == "1", setpoint, measured, adjustment)
+            if new != (self.heat_demand, self.setpoint, self.measured_temperature, self.adjustment):
+                self.heat_demand, self.setpoint, self.measured_temperature, self.adjustment = new
                 changed = True
         elif message.address == self.relay_address and message.value is not None:
             on = message.value > 0
@@ -104,7 +115,8 @@ class ClimateZone(_Observable):
 
     def __repr__(self) -> str:
         return (f"ClimateZone(name={self.name!r}, measured={self.measured_temperature}, "
-                f"setpoint={self.setpoint}, demand={self.heat_demand}, relay={self.relay_on}, "
+                f"setpoint={self.setpoint}, adjustment={self.adjustment}, "
+                f"effective={self.effective_setpoint}, demand={self.heat_demand}, relay={self.relay_on}, "
                 f"mode={self.mode or self.mode_index})")
 
 

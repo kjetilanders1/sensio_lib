@@ -46,13 +46,14 @@ async def test_thermostat_relay_and_meter_updates():
     changes = []
     stue.add_listener(lambda: changes.append(1))
 
-    push("RSN 1001 TH_Stue001 7 1 1 22.0 21.4 -0.3")      # wants heat; last field ignored
-    assert (stue.setpoint, stue.measured_temperature, stue.heat_demand) == (22.0, 21.4, True)
+    push("RSN 1001 TH_Stue001 7 1 1 22.0 21.4 -0.3")      # wants heat; adjusted on the thermostat
+    assert (stue.setpoint, stue.adjustment, stue.effective_setpoint) == (22.0, -0.3, 21.7)
+    assert (stue.measured_temperature, stue.heat_demand) == (21.4, True)
     push("RSN 1002 R_VKStue001 8 1 1 0")
     assert stue.relay_on is True
     push("RSN 1001 TH_Stue001 7 1 0 22.0 22.1 0.4")
-    assert (stue.measured_temperature, stue.heat_demand) == (22.1, False)
-    push("RSN 1001 TH_Stue001 7 1 0 22.0 22.1 0.5")       # only the unknown field changed -> no update
+    assert (stue.measured_temperature, stue.heat_demand, stue.effective_setpoint) == (22.1, False, 22.4)
+    push("RSN 1001 TH_Stue001 7 1 0 22.0 22.1 0.4")       # nothing changed -> no update
     assert len(changes) == 3
 
     meter = hub.get_power_meter()
@@ -93,4 +94,14 @@ async def test_malformed_thermostat_is_ignored():
     stue = hub.get_climate_zones()[0]
     push("RSN 1001 TH_Stue001 7 1 1")                     # too few fields
     push("RSN 1001 TH_Stue001 7 1 1 x y")                 # not numbers -> None values
-    assert stue.measured_temperature is None and stue.setpoint is None
+    assert stue.measured_temperature is None and stue.setpoint is None and stue.effective_setpoint is None
+    push("RSN 1001 TH_Stue001 7 1 0 22.0 21.0")           # no adjustment field -> the setpoint as is
+    assert (stue.adjustment, stue.effective_setpoint) == (None, 22.0)
+
+
+async def test_living_room_2026_11_08_wants_no_heat():
+    hub, push = await make_hub()
+    stue = hub.get_climate_zones()[0]
+    push("SSN 1001 TH_Stue060 7 1 0 22.0 20.4 -2.3")      # real answer to d_obj
+    assert stue.effective_setpoint == 19.7 and stue.measured_temperature > stue.effective_setpoint
+    assert stue.heat_demand is False
