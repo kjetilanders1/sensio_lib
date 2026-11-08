@@ -7,6 +7,8 @@ a ``\\x00`` byte). Observed message kinds:
 - ``RSN <address> <name> <type> <f1> <f2> <f3>``: a function changed state.
   For relay outputs (type 8) the on/off state is ``f2`` (1/0); for memory
   values (type 23, e.g. ``*_State`` functions) the value is ``f3`` (float).
+- ``SSN ...``: same format, the controller's answer to ``d_obj <address>``
+  (a query that reads a function without changing it).
 - ``end <address>``: the controller finished processing a command.
 - Other lines (e.g. ``DS2 ...``) are passed through as ``UnknownMessage``.
 """
@@ -30,6 +32,7 @@ class RsnMessage:
     name: str
     type: int
     fields: tuple[str, ...]
+    queried: bool = False  # True for SSN, the answer to d_obj
 
     @property
     def value(self) -> float | None:
@@ -79,8 +82,8 @@ def parse_message(text: str) -> Message:
         return ConnectMessage(text)
     parts = text.split()
     try:
-        if len(parts) >= 4 and parts[0] == "RSN":
-            return RsnMessage(int(parts[1]), parts[2], int(parts[3]), tuple(parts[4:]))
+        if len(parts) >= 4 and parts[0] in ("RSN", "SSN"):
+            return RsnMessage(int(parts[1]), parts[2], int(parts[3]), tuple(parts[4:]), parts[0] == "SSN")
         if len(parts) == 2 and parts[0] == "end":
             return EndMessage(int(parts[1]))
     except ValueError:

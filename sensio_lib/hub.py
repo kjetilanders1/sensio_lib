@@ -118,6 +118,19 @@ class Hub:
         """Return the read-only house power meter, if the project has one."""
         return self._power_meter
 
+    async def query_state(self) -> None:
+        """Ask the controller for the current heating values instead of waiting for changes.
+
+        Sends ``d_obj <address>`` for every heating zone (thermostat, relay,
+        active mode) and the power meter. ``d_obj`` only reads; the answers
+        arrive as SSN messages and update the zones like notifications do.
+        """
+        addresses = [a for zone in self._climate_zones for a in zone.addresses]
+        if self._power_meter is not None:
+            addresses += self._power_meter.addresses
+        for address in addresses:
+            await self._socket_manager.send_command(f"d_obj {address}")
+
     def _handle_message(self, message: Message) -> None:
         """Update lights, heating zones and the meter from RSN notifications."""
         if not isinstance(message, RsnMessage):
@@ -151,9 +164,8 @@ class Hub:
         self._climate_zones, self._power_meter = parse_climate(functions)
         self._value_index = {}
         for zone in self._climate_zones:
-            self._value_index[zone.thermostat_address] = zone.handle
-            if zone.relay_address is not None:
-                self._value_index[zone.relay_address] = zone.handle
+            for address in zone.addresses:
+                self._value_index[address] = zone.handle
         if self._power_meter is not None:
             for address in self._power_meter.addresses:
                 self._value_index[address] = self._power_meter.handle

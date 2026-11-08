@@ -1,13 +1,17 @@
-"""Read-only heating data pushed by the controller: thermostat zones and the power meter.
+"""Read-only heating data: thermostat zones and the power meter.
 
-Everything here is filled from RSN notifications; nothing is sent to the
-controller. Values are None until the first notification after connecting.
+Filled from RSN notifications, and from SSN answers to ``d_obj`` queries
+(``Hub.query_state``), which read a function without changing it. Nothing
+else is sent to the controller. Values are None until the first message.
 
 Observed formats (Sensio SC-1):
 - Thermostat (type 7): ``RSN <addr> TH_<Room><n> 7 1 <demand> <setpoint> <measured> <x>``
   ``demand`` is 1 while the zone wants heat (the heat relay switches on at the
   same moment). The last field is not understood yet and is ignored.
 - Heat relay (type 8): ``RSN <addr> R_VK<Room><n> 8 1 <on> 0``.
+- Active mode (``ThermCur``, ``M_<Room><n>_Cur``, type 23): the index of the
+  setpoint slot in use, 0 = comfort, 1 = saving, 2 = frost protection (as in
+  sk0zzi/sensio_lib, which found the protocol on an X1).
 - Power meter (type 23, every 10 minutes): ``M_MeterCur`` is the average power
   in W over the last period; ``M_MeterSum`` is cumulative energy in watt-seconds.
 """
@@ -19,6 +23,7 @@ from collections.abc import Callable
 from .messages import RsnMessage
 
 WS_PER_KWH = 3_600_000
+MODES = ("comfort", "saving", "frost_protection")  # ThermCur value -> name
 
 
 class _Observable:
@@ -45,20 +50,35 @@ def _float(text: str) -> float | None:
 class ClimateZone(_Observable):
     """One heating zone (thermostat + heat relay). Read-only."""
 
-    def __init__(self, zone_id: str, name: str, thermostat_address: int, relay_address: int | None) -> None:
+    def __init__(self, zone_id: str, name: str, thermostat_address: int, relay_address: int | None,
+                 mode_address: int | None = None) -> None:
         super().__init__()
         self.zone_id = zone_id
         self.name = name
         self.thermostat_address = thermostat_address
         self.relay_address = relay_address
+        self.mode_address = mode_address
         self.measured_temperature: float | None = None
         self.setpoint: float | None = None
         self.heat_demand: bool | None = None
         self.relay_on: bool | None = None
+        self.mode_index: int | None = None
 
     @property
     def unique_id(self) -> str:
         return f"{self.zone_id}_climate"
+
+    @property
+    def mode(self) -> str | None:
+        """Active setpoint slot: comfort, saving or frost_protection; None if unknown."""
+        if self.mode_index is None or not 0 <= self.mode_index < len(MODES):
+            return None
+        return MODES[self.mode_index]
+
+    @property
+    def addresses(self) -> list[int]:
+        """Addresses whose messages update this zone (and that ``d_obj`` reads)."""
+        return [a for a in (self.thermostat_address, self.relay_address, self.mode_address) if a is not None]
 
     def handle(self, message: RsnMessage) -> None:
         """Update from an RSN message addressed to this zone."""
@@ -74,12 +94,18 @@ class ClimateZone(_Observable):
             if on != self.relay_on:
                 self.relay_on = on
                 changed = True
+        elif message.address == self.mode_address and message.value is not None:
+            index = int(round(message.value))
+            if index != self.mode_index:
+                self.mode_index = index
+                changed = True
         if changed:
             self._notify()
 
     def __repr__(self) -> str:
         return (f"ClimateZone(name={self.name!r}, measured={self.measured_temperature}, "
-                f"setpoint={self.setpoint}, demand={self.heat_demand}, relay={self.relay_on})")
+                f"setpoint={self.setpoint}, demand={self.heat_demand}, relay={self.relay_on}, "
+                f"mode={self.mode or self.mode_index})")
 
 
 class PowerMeter(_Observable):
@@ -119,12 +145,14 @@ def _zone_name(display_name: str) -> str:
 def parse_climate(functions: list[dict]) -> tuple[list[ClimateZone], PowerMeter | None]:
     """Build thermostat zones and the power meter from the project's functions."""
     relays = {f["zoneId"]: f["address"] for f in functions if f.get("subType") == "HeatRelay"}
+    modes = {f["zoneId"]: f["address"] for f in functions if f.get("subType") == "ThermCur"}
     zones = [
         ClimateZone(
             zone_id=f["zoneId"],
             name=_zone_name(f.get("displayName") or f["name"]),
             thermostat_address=f["address"],
             relay_address=relays.get(f["zoneId"]),
+            mode_address=modes.get(f["zoneId"]),
         )
         for f in functions
         if f.get("subType") == "Thermostat"

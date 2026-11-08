@@ -58,7 +58,7 @@ Tested against a Sensio SC-1 controller as well.
 
 ## Heating (read-only, v1.4.0)
 
-`hub.get_climate_zones()` returns one `ClimateZone` per thermostat with `measured_temperature`, `setpoint`, `heat_demand` and `relay_on`; `hub.get_power_meter()` returns a `PowerMeter` with `power_w` (average over the controller's 10-minute period) and `energy_kwh` (cumulative). All values come from the controller's notifications and are `None` until the first one after connecting; thermostats only report when the temperature changes. Nothing is sent to the controller, and there is no heating control yet.
+`hub.get_climate_zones()` returns one `ClimateZone` per thermostat with `measured_temperature`, `setpoint`, `heat_demand`, `relay_on` and `mode` (the active setpoint slot from `ThermCur`: `comfort`, `saving` or `frost_protection`); `hub.get_power_meter()` returns a `PowerMeter` with `power_w` (average over the controller's 10-minute period) and `energy_kwh` (cumulative). Values come from the controller's notifications and are `None` until the first one; thermostats only report when the temperature changes. `await hub.query_state()` asks for them at once: it sends `d_obj <address>` for every zone's thermostat, relay and mode and for the meter, and the controller answers with `SSN` messages in the RSN format (tested on an SC-1 on 2026-11-08, answers within a second). `d_obj` only reads. There is no heating control yet.
 
 ## Device Support
 
