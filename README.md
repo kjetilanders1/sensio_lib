@@ -60,9 +60,15 @@ Tested against a Sensio SC-1 controller as well.
 
 `hub.get_climate_zones()` returns one `ClimateZone` per thermostat with `measured_temperature`, `setpoint`, `heat_demand`, `relay_on` and `mode` (the active setpoint slot from `ThermCur`: `comfort`, `saving` or `frost_protection`); `hub.get_power_meter()` returns a `PowerMeter` with `power_w` (average over the controller's 10-minute period) and `energy_kwh` (cumulative). Values come from the controller's notifications and are `None` until the first one; thermostats only report when the temperature changes. `await hub.query_state()` asks for them at once: it sends `d_obj <address>` for every zone's thermostat, relay and mode and for the meter, and the controller answers with `SSN` messages in the RSN format (tested on an SC-1 on 2026-11-08, answers within a second). `d_obj` only reads. There is no heating control yet.
 
+## Dimmers (v1.5.0)
+
+`hub.get_dimmers()` returns one `Dimmer` per dimmer actuator: every `subGroupId` with both a `dim_set` and a `dim_value` function. `await dimmer.set_brightness(0-100)` sends `set_value <dim_value> <level>` and then `new_state <dim_set> 0`; `turn_on()` goes back to the last level above 0 (100 % if none has been seen) and `turn_off()` sets 0. The level comes from type 23 messages on the `dim_value` address (also when the wall switch is used: on 100, off 0), and `hub.query_state()` now also reads every dimmer's level with `d_obj`. `brightness` is `None` and `state` `UNKNOWN` until the first value; above 0 counts as on.
+
+Ported from sk0zzi/sensio_lib (2026-11-10) onto this fork's parser. Checked on an SC-1 on 2026-11-13 (LysLoftstueDimmeaktuator: 20 %, 30 %, 100 %, off, and the wall switch). The actuator's `S_…` analog function stayed 0.0 while the light was on, so it is not used; `light_mem` (scene levels) isn't either. Room buttons (`… All Lights`) are unchanged.
+
 ## Device Support
 
-This library has been tested with a Sensio X1 controller. Testing is limited, so your experience may vary. Device support is also very limited to only scenes and lights. Light state is read back from the controller's notifications (see above); dimming is not supported yet.
+This library has been tested with a Sensio X1 controller. Testing is limited, so your experience may vary. Device support is limited to scenes, lights, dimmers and read-only heating. Light state is read back from the controller's notifications (see above).
 
 ## Requirements
 

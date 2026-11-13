@@ -150,16 +150,18 @@ class TestDeviceParsing:
         assert hub.get_scenes() == []
 
     def test_parse_ignores_non_light_functions(self, hub):
-        """Functions like heating, timers etc should be ignored."""
+        """Functions like heating, timers etc should be ignored; dimmer functions become dimmers, not lights."""
         data = {
             "functions": [
                 {"address": 100, "subType": "memHeatAway", "name": "M_HeatAway", "displayName": "Heat Away", "zoneId": "z1", "subGroupId": 0, "type": 1, "properties": "", "displayOrder": -1},
                 {"address": 200, "subType": "dim_set", "name": "B_D_Light", "displayName": "Dimmer", "zoneId": "z1", "subGroupId": 10, "type": 0, "properties": "", "displayOrder": 1},
+                {"address": 201, "subType": "dim_value", "name": "M_D_Light", "displayName": "Dimmer", "zoneId": "z1", "subGroupId": 10, "type": 1, "properties": "", "displayOrder": 1},
             ]
         }
         hub._parse_devices(data)
         assert hub.get_lights() == []
         assert hub.get_scenes() == []
+        assert [d.name for d in hub.get_dimmers()] == ["Dimmer"]
 
 
 class TestExtractRoomName:

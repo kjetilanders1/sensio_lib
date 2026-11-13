@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 
 from .climate import ClimateZone, PowerMeter, parse_climate
+from .dimmer import Dimmer
 from .light import Light, LightState
 from .messages import Message, RsnMessage
 from .scene import Scene
@@ -29,6 +30,7 @@ class Hub:
         self._socket_manager = socket_manager or SocketManager(server_address)
         self._lights: list[Light] = []
         self._scenes: list[Scene] = []
+        self._dimmers: list[Dimmer] = []
         self._state_index: dict[int, Light] = {}
         self._climate_zones: list[ClimateZone] = []
         self._power_meter: PowerMeter | None = None
@@ -119,20 +121,22 @@ class Hub:
         return self._power_meter
 
     async def query_state(self) -> None:
-        """Ask the controller for the current heating values instead of waiting for changes.
+        """Ask the controller for the current values instead of waiting for changes.
 
         Sends ``d_obj <address>`` for every heating zone (thermostat, relay,
-        active mode) and the power meter. ``d_obj`` only reads; the answers
-        arrive as SSN messages and update the zones like notifications do.
+        active mode), the power meter and every dimmer's level. ``d_obj`` only
+        reads; the answers arrive as SSN messages and update the zones and
+        dimmers like notifications do.
         """
         addresses = [a for zone in self._climate_zones for a in zone.addresses]
         if self._power_meter is not None:
             addresses += self._power_meter.addresses
+        addresses += [dimmer.value_address for dimmer in self._dimmers]
         for address in addresses:
             await self._socket_manager.send_command(f"d_obj {address}")
 
     def _handle_message(self, message: Message) -> None:
-        """Update lights, heating zones and the meter from RSN notifications."""
+        """Update lights, dimmers, heating zones and the meter from RSN notifications."""
         if not isinstance(message, RsnMessage):
             return
         handler = self._value_index.get(message.address)
@@ -152,12 +156,17 @@ class Hub:
         """Return all discovered scenes."""
         return list(self._scenes)
 
+    def get_dimmers(self) -> list[Dimmer]:
+        """Return all discovered dimmer actuators."""
+        return list(self._dimmers)
+
     def _parse_devices(self, functions_data: dict) -> None:
-        """Parse the functions JSON into Light and Scene objects."""
+        """Parse the functions JSON into lights, scenes, dimmers and heating zones."""
         functions = functions_data.get("functions", [])
 
         self._lights = self._parse_lights(functions)
         self._scenes = self._parse_scenes(functions)
+        self._dimmers = self._parse_dimmers(functions)
         self._state_index = {
             light.state_address: light for light in self._lights if light.state_address is not None
         }
@@ -169,6 +178,41 @@ class Hub:
         if self._power_meter is not None:
             for address in self._power_meter.addresses:
                 self._value_index[address] = self._power_meter.handle
+        for dimmer in self._dimmers:
+            self._value_index[dimmer.value_address] = dimmer.handle
+
+    def _parse_dimmers(self, functions: list[dict]) -> list[Dimmer]:
+        """One Dimmer per subGroupId that has both a ``dim_set`` and a ``dim_value`` function.
+
+        The other functions of a dimmer actuator (``light_mem``: scene levels,
+        ``S_…``: an analog value that doesn't follow the light) are not used.
+        """
+        groups: dict[int, dict] = {}
+        for func in functions:
+            sub_type = func["subType"]
+            sub_group_id = func["subGroupId"]
+            if sub_type not in ("dim_set", "dim_value") or sub_group_id == 0:
+                continue
+            group = groups.setdefault(sub_group_id, {
+                "name": func["displayName"],
+                "zone_id": func["zoneId"],
+                "dim_set": None,
+                "dim_value": None,
+            })
+            group[sub_type] = func["address"]
+
+        return [
+            Dimmer(
+                unique_id=str(sub_group_id),
+                name=info["name"],
+                zone_id=info["zone_id"],
+                set_address=info["dim_set"],
+                value_address=info["dim_value"],
+                socket_manager=self._socket_manager,
+            )
+            for sub_group_id, info in groups.items()
+            if info["dim_set"] is not None and info["dim_value"] is not None
+        ]
 
     def _parse_lights(self, functions: list[dict]) -> list[Light]:
         """Parse individual lights and room-level light controls."""

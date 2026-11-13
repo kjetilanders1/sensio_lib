@@ -2,6 +2,7 @@
 
 from .climate import ClimateZone, PowerMeter
 from .device import Device
+from .dimmer import Dimmer, DimmerState
 from .exceptions import (
     SensioAuthenticationError,
     SensioCommandError,
@@ -18,6 +19,8 @@ __all__ = [
     "ClimateZone",
     "PowerMeter",
     "Device",
+    "Dimmer",
+    "DimmerState",
     "Hub",
     "Light",
     "LightState",
